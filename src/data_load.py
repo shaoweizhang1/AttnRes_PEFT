@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 from datasets import load_dataset
+from tqdm import tqdm
 
 
 DEFAULT_OUT_DIR = Path("data")
@@ -63,7 +64,7 @@ def format_rte(example, split):
 
 
 def format_boolq(example, split):
-    label = "yes" if bool(example["answer"]) else "no"
+    label = "yes" if bool(example["label"]) else "no"
     return {
         "instruction": "Read the passage and answer the question with yes or no.",
         "input": (
@@ -79,21 +80,27 @@ def format_boolq(example, split):
 def process_gsm8k(output_dir):
     dataset = load_dataset("gsm8k", "main")
     for split in ("train", "test"):
-        records = [format_gsm8k(example, split) for example in dataset[split]]
+        records = []
+        for example in tqdm(dataset[split], desc=f"Processing gsm8k {split}"):
+            records.append(format_gsm8k(example, split))
         _write_json(records, output_dir / "gsm8k" / f"{split}.json")
 
 
 def process_rte(output_dir):
     dataset = load_dataset("glue", "rte")
     for split in ("train", "validation"):
-        records = [format_rte(example, split) for example in dataset[split]]
+        records = []
+        for example in tqdm(dataset[split], desc=f"Processing rte {split}"):
+            records.append(format_rte(example, split))
         _write_json(records, output_dir / "rte" / f"{split}.json")
 
 
 def process_boolq(output_dir):
     dataset = load_dataset("super_glue", "boolq")
     for split in ("train", "validation"):
-        records = [format_boolq(example, split) for example in dataset[split]]
+        records = []
+        for example in tqdm(dataset[split], desc=f"Processing boolq {split}"):
+            records.append(format_boolq(example, split))
         _write_json(records, output_dir / "boolq" / f"{split}.json")
 
 
