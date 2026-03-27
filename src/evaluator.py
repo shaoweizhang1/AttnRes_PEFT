@@ -103,6 +103,7 @@ class Evaluator:
             tensor_parallel_size=args.tensor_parallel_size,
             gpu_memory_utilization=args.gpu_memory_utilization,
             trust_remote_code=True,
+            disable_log_stats=True,
         )
         self.sampling_params = SamplingParams(
             temperature=0.0,
