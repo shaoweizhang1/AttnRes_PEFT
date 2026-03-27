@@ -16,6 +16,7 @@ Output format:
   }
 ]
 """
+import os
 
 import argparse
 import json
@@ -24,7 +25,11 @@ from pathlib import Path
 from datasets import load_dataset
 from tqdm import tqdm
 
+from huggingface_hub import snapshot_download
 
+
+MODEL_NAME = "Qwen/Qwen2.5-7B"
+SAVE_DIR = "./model"
 DEFAULT_OUT_DIR = Path("data")
 
 
@@ -77,47 +82,52 @@ def format_boolq(example, split):
     }
 
 
-def process_gsm8k(output_dir):
-    dataset = load_dataset("gsm8k", "main")
-    for split in ("train", "test"):
-        records = []
-        for example in tqdm(dataset[split], desc=f"Processing gsm8k {split}"):
-            records.append(format_gsm8k(example, split))
-        _write_json(records, output_dir / "gsm8k" / f"{split}.json")
+class DataLoader:
+    def __init__(self, output_dir=DEFAULT_OUT_DIR):
+        self.output_dir = Path(output_dir)
+
+    def process_gsm8k(self):
+        dataset = load_dataset("gsm8k", "main")
+        for split in ("train", "test"):
+            records = []
+            for example in tqdm(dataset[split], desc=f"Processing gsm8k {split}"):
+                records.append(format_gsm8k(example, split))
+            _write_json(records, self.output_dir / "gsm8k" / f"{split}.json")
+
+    def process_rte(self):
+        dataset = load_dataset("glue", "rte")
+        for split in ("train", "validation"):
+            records = []
+            for example in tqdm(dataset[split], desc=f"Processing rte {split}"):
+                records.append(format_rte(example, split))
+            _write_json(records, self.output_dir / "rte" / f"{split}.json")
+
+    def process_boolq(self):
+        dataset = load_dataset("super_glue", "boolq")
+        for split in ("train", "validation"):
+            records = []
+            for example in tqdm(dataset[split], desc=f"Processing boolq {split}"):
+                records.append(format_boolq(example, split))
+            _write_json(records, self.output_dir / "boolq" / f"{split}.json")
+
+    def run(self):
+        self.process_gsm8k()
+        self.process_rte()
+        self.process_boolq()
 
 
-def process_rte(output_dir):
-    dataset = load_dataset("glue", "rte")
-    for split in ("train", "validation"):
-        records = []
-        for example in tqdm(dataset[split], desc=f"Processing rte {split}"):
-            records.append(format_rte(example, split))
-        _write_json(records, output_dir / "rte" / f"{split}.json")
 
+class ModelLoader:
+    def __init__(self, model_name=MODEL_NAME, save_dir=SAVE_DIR):
+        self.model_name = model_name
+        self.save_dir = save_dir
 
-def process_boolq(output_dir):
-    dataset = load_dataset("super_glue", "boolq")
-    for split in ("train", "validation"):
-        records = []
-        for example in tqdm(dataset[split], desc=f"Processing boolq {split}"):
-            records.append(format_boolq(example, split))
-        _write_json(records, output_dir / "boolq" / f"{split}.json")
+    def run(self):
+        os.makedirs(self.save_dir, exist_ok=True)
 
-
-def main():
-    parser = argparse.ArgumentParser(description="Download and convert datasets to Alpaca format.")
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=DEFAULT_OUT_DIR,
-        help="Directory to store processed Alpaca-style datasets.",
-    )
-    args = parser.parse_args()
-
-    process_gsm8k(args.output_dir)
-    process_rte(args.output_dir)
-    process_boolq(args.output_dir)
-
-
-if __name__ == "__main__":
-    main()
+        snapshot_download(
+            repo_id=self.model_name,
+            local_dir=self.save_dir,
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
