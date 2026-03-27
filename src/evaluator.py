@@ -109,57 +109,65 @@ class Evaluator:
             max_tokens=args.max_new_tokens,
         )
 
-    def generate_one(self, prompt):
+    def generate_batch(self, prompts):
         start_time = time.time()
-        outputs = self.model.generate([prompt], self.sampling_params)
+        outputs = self.model.generate(prompts, self.sampling_params)
         end_time = time.time()
 
-        prediction = outputs[0].outputs[0].text.strip()
-        generated_tokens = len(outputs[0].outputs[0].token_ids)
+        results = []
         latency = end_time - start_time
 
-        result = {
-            "prediction": prediction,
-            "latency": latency,
-            "generated_tokens": generated_tokens,
-        }
+        for output in outputs:
+            prediction = output.outputs[0].text.strip()
+            generated_tokens = len(output.outputs[0].token_ids)
 
-        if latency > 0:
-            result["tokens_per_second"] = generated_tokens / latency
+            result = {
+                "prediction": prediction,
+                "latency": latency,
+                "generated_tokens": generated_tokens,
+            }
 
-        return result
+            if latency > 0:
+                result["tokens_per_second"] = generated_tokens / latency
+
+            results.append(result)
+
+        return results
 
     def evaluate(self, data):
         details = []
 
-        for example in tqdm(data, desc="Evaluating"):
-            prompt = build_prompt(example)
-            result = self.generate_one(prompt)
-            score, normalized_prediction, normalized_answer = compute_score(
-                example["task"], result["prediction"], example["output"]
-            )
+        for i in tqdm(range(0, len(data), self.args.batch_size), desc="Evaluating"):
+            batch = data[i:i + self.args.batch_size]
+            prompts = [build_prompt(example) for example in batch]
+            results = self.generate_batch(prompts)
 
-            row = {
-                "task": example["task"],
-                "split": example["split"],
-                "instruction": example["instruction"],
-                "input": example["input"],
-                "reference": example["output"],
-                "prediction": result["prediction"],
-                "normalized_reference": normalized_answer,
-                "normalized_prediction": normalized_prediction,
-                "correct": score,
-                "latency": result["latency"],
-                "generated_tokens": result["generated_tokens"],
-            }
+            for example, result in zip(batch, results):
+                score, normalized_prediction, normalized_answer = compute_score(
+                    example["task"], result["prediction"], example["output"]
+                )
 
-            if "tokens_per_second" in result:
-                row["tokens_per_second"] = result["tokens_per_second"]
+                row = {
+                    "task": example["task"],
+                    "split": example["split"],
+                    "instruction": example["instruction"],
+                    "input": example["input"],
+                    "reference": example["output"],
+                    "prediction": result["prediction"],
+                    "normalized_reference": normalized_answer,
+                    "normalized_prediction": normalized_prediction,
+                    "correct": score,
+                    "latency": result["latency"],
+                    "generated_tokens": result["generated_tokens"],
+                }
 
-            if "peak_memory_mb" in result:
-                row["peak_memory_mb"] = result["peak_memory_mb"]
+                if "tokens_per_second" in result:
+                    row["tokens_per_second"] = result["tokens_per_second"]
 
-            details.append(row)
+                if "peak_memory_mb" in result:
+                    row["peak_memory_mb"] = result["peak_memory_mb"]
+
+                details.append(row)
 
         return details
 
@@ -177,6 +185,7 @@ def main():
     parser.add_argument("--save_dir", default=DEFAULT_SAVE_DIR)
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--max_samples", type=int, default=None)
+    parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     args = parser.parse_args()
