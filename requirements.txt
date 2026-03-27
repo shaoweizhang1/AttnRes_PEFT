@@ -4,3 +4,4 @@ transformers==4.46.3
 peft==0.13.2
 tqdm==4.67.3
 wandb==0.19.11
+vllm==0.8.4

@@ -3,9 +3,9 @@ import os
 import re
 import time
 
-import torch
 from tqdm import tqdm
-from src.utils import build_prompt, get_device, load_json, load_model, load_tokenizer, save_json
+from src.utils import build_prompt, load_json, load_tokenizer, save_json
+from vllm import LLM, SamplingParams
 
 
 DEFAULT_MODEL_DIR = "./model"
@@ -97,30 +97,25 @@ def save_results(details, summary, save_dir):
 class Evaluator:
     def __init__(self, args):
         self.args = args
-        self.device = get_device()
         self.tokenizer = load_tokenizer(args.model_dir)
-        self.model = load_model(args.model_dir, self.device)
-        self.model.eval()
+        self.model = LLM(
+            model=args.model_dir,
+            tensor_parallel_size=args.tensor_parallel_size,
+            gpu_memory_utilization=args.gpu_memory_utilization,
+            trust_remote_code=True,
+        )
+        self.sampling_params = SamplingParams(
+            temperature=0.0,
+            max_tokens=args.max_new_tokens,
+        )
 
     def generate_one(self, prompt):
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
-
-        if self.device == "cuda":
-            torch.cuda.reset_peak_memory_stats()
-
         start_time = time.time()
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=self.args.max_new_tokens,
-                do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
+        outputs = self.model.generate([prompt], self.sampling_params)
         end_time = time.time()
 
-        generated_ids = outputs[0][inputs["input_ids"].shape[1]:]
-        prediction = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
-        generated_tokens = len(generated_ids)
+        prediction = outputs[0].outputs[0].text.strip()
+        generated_tokens = len(outputs[0].outputs[0].token_ids)
         latency = end_time - start_time
 
         result = {
@@ -131,9 +126,6 @@ class Evaluator:
 
         if latency > 0:
             result["tokens_per_second"] = generated_tokens / latency
-
-        if self.device == "cuda":
-            result["peak_memory_mb"] = torch.cuda.max_memory_allocated() / 1024 / 1024
 
         return result
 
@@ -185,6 +177,8 @@ def main():
     parser.add_argument("--save_dir", default=DEFAULT_SAVE_DIR)
     parser.add_argument("--max_new_tokens", type=int, default=64)
     parser.add_argument("--max_samples", type=int, default=None)
+    parser.add_argument("--tensor_parallel_size", type=int, default=1)
+    parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     args = parser.parse_args()
     evaluator = Evaluator(args)
     evaluator.run()
