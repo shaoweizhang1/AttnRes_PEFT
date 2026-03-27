@@ -5,7 +5,7 @@ import time
 
 import torch
 from tqdm import tqdm
-from utils import build_prompt, get_device, load_json, load_model, load_tokenizer, save_json
+from src.utils import build_prompt, get_device, load_json, load_model, load_tokenizer, save_json
 
 
 DEFAULT_MODEL_DIR = "./model"
