@@ -1,0 +1,388 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import PreTrainedModel, AutoModelForCausalLM
+from transformers.generation import GenerationMixin
+from transformers.modeling_outputs import CausalLMOutputWithPast
+ 
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.eps = eps
+
+    def forward(self, x):
+        # x: [..., dim]
+        norm = x.pow(2).mean(dim=-1, keepdim=True)
+        x = x * torch.rsqrt(norm + self.eps)
+        return self.weight * x
+
+
+class DepthAttentionAdapter(nn.Module):
+    """
+    Simple full-depth adapter:
+      - attends over previous hidden states
+      - returns a gated additive correction
+    """
+    def __init__(self, hidden_size, gate_init=0.0):
+        super().__init__()
+        self.hidden_size = hidden_size
+
+        self.query = nn.Parameter(torch.randn(hidden_size) * 0.02)
+        self.gate = nn.Parameter(torch.tensor(gate_init)) # so that the model is intact beforing traing, which means attention residual has no effect befor training
+
+        self.score_norm = RMSNorm(hidden_size)
+        self.out_norm = RMSNorm(hidden_size)
+
+    def forward(self, h_base, prev_states):
+        """
+        h_base: [B, T, D], the output from the frozen part of the model
+        prev_states: list of [B, T, D], length >= 1, the hidden states of after additive PEFT styple AttnRes adapter. see more by refering to the paper
+        """
+        # Stack previous states: [B, Lprev, T, D]
+        sources = torch.stack(prev_states, dim=1)
+
+        # Score each source with a learned query
+        normed = self.score_norm(sources)
+        scores = torch.einsum("d,bltd->blt", self.query, normed)  # [B, Lprev, T]
+
+        # Depth attention
+        alpha = F.softmax(scores, dim=1)  # softmax over depth/source axis
+
+        # Weighted sum over sources
+        delta = torch.einsum("blt,bltd->btd", alpha, sources)  # [B, T, D]
+        delta = self.out_norm(delta)
+
+        # Gated residual adapter
+        out = h_base + self.gate * delta
+        return out, alpha
+
+
+
+
+class Qwen3WithAttnResPEFT(nn.Module):
+    def __init__(self, base_lm, lookback=None):
+        """
+        base_lm: AutoModelForCausalLM or similar Qwen3 model
+        lookback: if set, only attend over the last `lookback` states
+        """
+        super().__init__()
+        self.base_lm = base_lm
+        self.model = base_lm.model  # common HF decoder-only convention
+        self.lookback = lookback
+
+        hidden_size = self.model.embed_tokens.embedding_dim
+
+        self.adapters = nn.ModuleList([
+            DepthAttentionAdapter(hidden_size=hidden_size, gate_init=10)
+            for _ in range(len(self.model.layers))
+        ])
+
+        emb = self.model.embed_tokens.weight
+        self.adapters.to(device=emb.device, dtype=emb.dtype)
+
+        self.freeze_backbone()
+
+    def freeze_backbone(self):
+        for p in self.base_lm.parameters():
+            p.requires_grad = False
+
+        # unfreeze adapters
+        for p in self.adapters.parameters():
+            p.requires_grad = True
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        labels=None,
+        return_depth_weights=False,
+        **kwargs
+    ):
+        # Embedding
+        hidden_states = self.model.embed_tokens(input_ids)
+
+        # Keep previous layer outputs for depth attention
+        prev_states = [hidden_states]
+        all_alphas = []
+
+        # Iterate through decoder blocks
+        for layer_idx, (layer, adapter) in enumerate(zip(self.model.layers, self.adapters)):
+            if self.lookback is not None:
+                adapter_prev_states = prev_states[-self.lookback:]
+            else:
+                adapter_prev_states = prev_states
+
+            # Qwen-style layer forward
+            # NOTE: exact kwargs may vary slightly by Qwen3 implementation
+            layer_outputs = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                **kwargs
+            )
+
+            # HF decoder blocks often return tuple: (hidden_states, ...)
+            h_base = layer_outputs[0] if isinstance(layer_outputs, tuple) else layer_outputs
+
+            # Add AttnRes-style adapter correction
+            hidden_states, alpha = adapter(h_base, adapter_prev_states)
+            prev_states.append(hidden_states)
+
+            if return_depth_weights:
+                all_alphas.append(alpha)
+
+        # Final norm
+        if hasattr(self.model, "norm") and self.model.norm is not None:
+            hidden_states = self.model.norm(hidden_states)
+
+        # LM head
+        logits = self.base_lm.lm_head(hidden_states)
+
+        loss = None
+        if labels is not None:
+            # standard causal LM loss
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100
+            )
+
+        output = {
+            "logits": logits,
+            "loss": loss,
+        }
+
+        if return_depth_weights:
+            output["depth_weights"] = all_alphas
+
+        return output
+
+
+class Qwen3AttnResConfigMixin:
+    """
+    Optional mixin-like helper if you want to store adapter settings
+    in config. You can also just pass them at init time.
+    """
+    attnres_lookback = None
+    attnres_enable = True
+
+class Qwen3ForCausalLMWithAttnRes(PreTrainedModel, GenerationMixin):
+    """
+    Wrapper around a Qwen3 causal LM with frozen backbone
+    and trainable depth-attention residual adapters.
+    """
+    config_class = None  # set this to the actual Qwen3 config class if you want tighter integration
+    base_model_prefix = "model"
+
+    def __init__(self, config, base_model, lookback=None, gate_init=0.0):
+        # This wrapper does not implement the SDPA capability checks expected by
+        # PreTrainedModel, so force eager attention for safe initialization.
+        if getattr(config, "_attn_implementation", None) != "eager":
+            config._attn_implementation = "eager"
+            config._attn_implementation_internal = "eager"
+        super().__init__(config)
+        self.model = base_model.model
+        self.lm_head = base_model.lm_head
+        self.base_lm = base_model
+        self.lookback = lookback
+        self.gate_init = gate_init
+
+        hidden_size = self.model.embed_tokens.embedding_dim
+
+        self.adapters = nn.ModuleList([
+            DepthAttentionAdapter(hidden_size=hidden_size, gate_init=self.gate_init)
+            for _ in range(len(self.model.layers))
+        ])
+
+        emb = self.model.embed_tokens.weight
+        self.adapters.to(device=emb.device, dtype=emb.dtype)
+
+        self.freeze_backbone()
+
+    def freeze_backbone(self):
+        for p in self.base_lm.parameters():
+            p.requires_grad = False
+
+        for p in self.adapters.parameters():
+            p.requires_grad = True
+
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
+
+    def set_input_embeddings(self, new_embeddings):
+        self.model.embed_tokens = new_embeddings
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def set_output_embeddings(self, new_output_embeddings):
+        self.lm_head = new_output_embeddings
+
+    def _adapters_effectively_disabled(self):
+        return all(torch.allclose(adapter.gate.detach(), torch.zeros_like(adapter.gate)) for adapter in self.adapters)
+
+    def prepare_inputs_for_generation(self, input_ids, attention_mask=None, **kwargs):
+        # This wrapper currently recomputes the full forward and does not
+        # maintain KV cache state across decoding steps.
+        kwargs.pop("past_key_values", None)
+        kwargs.pop("cache_position", None)
+        kwargs.pop("position_embeddings", None)
+        kwargs.pop("use_cache", None)
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "use_cache": False,
+            **kwargs,
+        }
+
+    def generate(self, *args, **kwargs):
+        if self._adapters_effectively_disabled():
+            return self.base_lm.generate(*args, **kwargs)
+        return super().generate(*args, **kwargs)
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        labels=None,
+        use_cache=False,
+        output_attentions=False,
+        output_hidden_states=False,
+        return_dict=True,
+        **kwargs
+    ):
+        # Keep exact base-model behavior when adapters are not active yet.
+        if self._adapters_effectively_disabled():
+            return self.base_lm(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                labels=labels,
+                use_cache=False,
+                output_attentions=output_attentions,
+                output_hidden_states=output_hidden_states,
+                return_dict=return_dict,
+                **kwargs,
+            )
+
+        hidden_states = self.model.embed_tokens(input_ids)
+
+        cache_position = kwargs.pop("cache_position", None)
+        past_key_values = kwargs.pop("past_key_values", None)
+        position_embeddings = kwargs.pop("position_embeddings", None)
+
+        if position_ids is None:
+            seq_len = hidden_states.shape[1]
+            position_ids = torch.arange(seq_len, device=hidden_states.device).unsqueeze(0)
+
+        if position_embeddings is None and hasattr(self.model, "rotary_emb"):
+            position_embeddings = self.model.rotary_emb(hidden_states, position_ids)
+
+        prev_states = [hidden_states]
+        all_alphas = []
+        all_hidden_states = [] if output_hidden_states else None
+
+        if output_hidden_states:
+            all_hidden_states.append(hidden_states)
+
+        for layer_idx, (layer, adapter) in enumerate(zip(self.model.layers, self.adapters)):
+            # frozen backbone block
+            layer_outputs = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                use_cache=False,
+                output_attentions=False,
+                **kwargs
+            )
+
+            if isinstance(layer_outputs, tuple):
+                h_base = layer_outputs[0]
+            else:
+                h_base = layer_outputs
+
+            # lookback window
+            if self.lookback is not None:
+                adapter_prev_states = prev_states[-self.lookback:]
+            else:
+                adapter_prev_states = prev_states
+
+            hidden_states, alpha = adapter(h_base, adapter_prev_states)
+            prev_states.append(hidden_states)
+
+            if output_hidden_states:
+                all_hidden_states.append(hidden_states)
+
+            if output_attentions:
+                all_alphas.append(alpha)
+
+        if hasattr(self.model, "norm") and self.model.norm is not None:
+            hidden_states = self.model.norm(hidden_states)
+
+        logits = self.lm_head(hidden_states)
+
+        loss = None
+        if labels is not None:
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100
+            )
+
+        if not return_dict:
+            output = (logits,)
+            if loss is not None:
+                output = (loss,) + output
+            return output
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=None,
+            hidden_states=tuple(all_hidden_states) if output_hidden_states else None,
+            attentions=tuple(all_alphas) if output_attentions else None
+        )
+
+
+# This part can be moved to a separate utils file if desired
+
+def load_qwen3_attnres_model(
+    model_name_or_path,
+    lookback=8,
+    gate_init=0.0,
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+):
+    if isinstance(model_name_or_path, str):
+        base_model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path,
+            torch_dtype=torch_dtype,
+            device_map=device_map,
+            attn_implementation="eager",
+        )
+    else:
+        base_model = model_name_or_path
+
+    # Ensure wrapper initialization does not request SDPA.
+    base_model.config._attn_implementation = "eager"
+    base_model.config._attn_implementation_internal = "eager"
+
+    config = base_model.config
+    wrapped = Qwen3ForCausalLMWithAttnRes(
+        config=config,
+        base_model=base_model,
+        lookback=lookback,
+        gate_init=gate_init,
+    )
+    return wrapped
