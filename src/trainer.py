@@ -80,12 +80,32 @@ def get_lora_model(model, args):
     return model
 
 
-def get_attnres_model(model, args):
-    from src.attnres_peft.tuner import get_attnres_model
+# def get_attnres_model(model, args):
+#     from src.attnres_peft.tuner import get_attnres_model
 
-    model = get_attnres_model(model, args)
-    if hasattr(model, "print_trainable_parameters"):
-        model.print_trainable_parameters()
+#     model = get_attnres_model(model, args)
+#     if hasattr(model, "print_trainable_parameters"):
+#         model.print_trainable_parameters()
+#     return model
+
+def get_attnres_model(model,args:Dict):
+    """
+    
+    """
+    from src.AttnResAdapter import load_qwen3_attnres_model
+
+    model = load_qwen3_attnres_model(
+        model,
+        lookback=args.attnres_lookback,
+        gate_init=args.attnres_gate_init,
+    )
+
+    def print_trainable_parameters(model):
+        trainable = [n for n, p in model.named_parameters() if p.requires_grad]
+        print("Trainable parameters:")
+        for n in trainable:
+            print(n)
+    print_trainable_parameters(model)
     return model
 
 
