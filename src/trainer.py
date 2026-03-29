@@ -89,9 +89,6 @@ def get_lora_model(model, args):
 #     return model
 
 def get_attnres_model(model, args):
-    """
-    
-    """
     from src.AttnResAdapter import load_qwen3_attnres_model
 
     model = load_qwen3_attnres_model(
@@ -100,12 +97,8 @@ def get_attnres_model(model, args):
         gate_init=args.attnres_gate_init,
     )
 
-    def print_trainable_parameters(model):
-        trainable = [n for n, p in model.named_parameters() if p.requires_grad]
-        print("Trainable parameters:")
-        for n in trainable:
-            print(n)
-    print_trainable_parameters(model)
+    if hasattr(model, "print_trainable_parameters"):
+        model.print_trainable_parameters()
     return model
 
 

@@ -84,7 +84,7 @@ class Qwen3WithAttnResPEFT(nn.Module):
         ])
 
         emb = self.model.embed_tokens.weight
-        self.adapters.to(device=emb.device, dtype=emb.dtype)
+        self.adapters.to(device=emb.device)
 
         self.freeze_backbone()
 
@@ -204,7 +204,7 @@ class Qwen3ForCausalLMWithAttnRes(PreTrainedModel, GenerationMixin):
         ])
 
         emb = self.model.embed_tokens.weight
-        self.adapters.to(device=emb.device, dtype=emb.dtype)
+        self.adapters.to(device=emb.device)
 
         self.freeze_backbone()
 
@@ -214,6 +214,21 @@ class Qwen3ForCausalLMWithAttnRes(PreTrainedModel, GenerationMixin):
 
         for p in self.adapters.parameters():
             p.requires_grad = True
+
+    def print_trainable_parameters(self):
+        trainable_params = 0
+        all_params = 0
+
+        for _, param in self.named_parameters():
+            all_params += param.numel()
+            if param.requires_grad:
+                trainable_params += param.numel()
+
+        print(
+            f"trainable params: {trainable_params:,} || "
+            f"all params: {all_params:,} || "
+            f"trainable%: {100 * trainable_params / all_params:.4f}"
+        )
 
     def get_input_embeddings(self):
         return self.model.embed_tokens
