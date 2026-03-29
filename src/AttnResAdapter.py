@@ -358,16 +358,16 @@ def load_qwen3_attnres_model(
 ):
 
 
-"""
-Helper function to load a Qwen Series model and wrap it with the AttnRes adapter.
-Autually, not only for Qwen Series, but any model with a similar architecture and HF implementation should work with minor adjustments.
-Qwen are experimented by us. 
+    """
+    Helper function to load a Qwen Series model and wrap it with the AttnRes adapter.
+    Autually, not only for Qwen Series, but any model with a similar architecture and HF implementation should work with minor adjustments.
+    Qwen are experimented by us. 
 
-model_name_or_path: can be a string path(HF official name) to a pretrained model or an already loaded AutoModelForCausalLM. The function will wrap the model with the AttnRes adapter.
-lookback: can be None or an integer. If set, the adapter will only attend over the last `lookback` states instead of all previous states. This can save memory and computation with minimal impact on performance in many cases.
-gate_init: initial value for the adapter gate. Setting this to 0.0 means the adapter has no effect at the start of training, which can help with stable convergence. You can also start with a small positive value to give the adapter some initial influence.
+    model_name_or_path: can be a string path(HF official name) to a pretrained model or an already loaded AutoModelForCausalLM. The function will wrap the model with the AttnRes adapter.
+    lookback: can be None or an integer. If set, the adapter will only attend over the last `lookback` states instead of all previous states. This can save memory and computation with minimal impact on performance in many cases.
+    gate_init: initial value for the adapter gate. Setting this to 0.0 means the adapter has no effect at the start of training, which can help with stable convergence. You can also start with a small positive value to give the adapter some initial influence.
 
-"""
+    """
     if isinstance(model_name_or_path, str):
         base_model = AutoModelForCausalLM.from_pretrained(
             model_name_or_path,

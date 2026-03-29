@@ -88,7 +88,7 @@ def get_lora_model(model, args):
 #         model.print_trainable_parameters()
 #     return model
 
-def get_attnres_model(model,args:Dict):
+def get_attnres_model(model, args):
     """
     
     """
@@ -203,6 +203,8 @@ def build_parser():
     parser.add_argument("--lora_alpha", type=int, default=16)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
     parser.add_argument("--lora_target_modules", default="q_proj,k_proj,v_proj,o_proj")
+    parser.add_argument("--attnres_lookback", type=int, default=8)
+    parser.add_argument("--attnres_gate_init", type=float, default=0.0)
     return parser
 
 
