@@ -142,7 +142,9 @@ class Qwen3ForCausalLMWithAttnRes(PreTrainedModel, GenerationMixin):
 
     def save_pretrained(self, save_directory, *args, **kwargs):
         safe_serialization = kwargs.pop("safe_serialization", True)
-        selected_state_dict = self.state_dict()
+        selected_state_dict = kwargs.pop("state_dict", None)
+        if selected_state_dict is None:
+            selected_state_dict = self.state_dict()
         return super().save_pretrained(
             save_directory,
             *args,
