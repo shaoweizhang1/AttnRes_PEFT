@@ -130,6 +130,11 @@ class TrainerRunner:
         return train_dataset, eval_dataset
 
     def build_training_args(self, has_eval):
+        # The AttnRes wrapper reuses backbone modules under multiple names
+        # (e.g. model.* and base_lm.model.*), which safetensors rejects as
+        # shared tensors when Trainer saves checkpoints.
+        save_safetensors = self.args.method != "attnres"
+
         return TrainingArguments(
             output_dir=self.args.save_dir,
             num_train_epochs=self.args.num_train_epochs,
@@ -147,6 +152,7 @@ class TrainerRunner:
             report_to="wandb" if self.args.use_wandb else "none",
             run_name=self.args.wandb_run_name,
             remove_unused_columns=False,
+            save_safetensors=save_safetensors,
         )
 
     def run(self):
