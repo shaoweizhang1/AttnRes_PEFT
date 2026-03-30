@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import PreTrainedModel, AutoModelForCausalLM
 from transformers.generation import GenerationMixin
-from transformers.modeling_outputs import CausalLMOutputWithPast
  
 
 class RMSNorm(nn.Module):
@@ -62,109 +61,6 @@ class DepthAttentionAdapter(nn.Module):
 
         return out, alpha
 
-
-
-
-class Qwen3WithAttnResPEFT(nn.Module):
-    def __init__(self, base_lm, lookback=None):
-        """
-        base_lm: AutoModelForCausalLM or similar Qwen3 model
-        lookback: if set, only attend over the last `lookback` states
-        """
-        super().__init__()
-        self.base_lm = base_lm
-        self.model = base_lm.model  # common HF decoder-only convention
-        self.lookback = lookback
-
-        hidden_size = self.model.embed_tokens.embedding_dim
-
-        self.adapters = nn.ModuleList([
-            DepthAttentionAdapter(hidden_size=hidden_size, gate_init=10)
-            for _ in range(len(self.model.layers))
-        ])
-
-        emb = self.model.embed_tokens.weight
-        self.adapters.to(device=emb.device)
-
-        self.freeze_backbone()
-
-    def freeze_backbone(self):
-        for p in self.base_lm.parameters():
-            p.requires_grad = False
-
-        # unfreeze adapters
-        for p in self.adapters.parameters():
-            p.requires_grad = True
-
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        position_ids=None,
-        labels=None,
-        return_depth_weights=False,
-        **kwargs
-    ):
-        # Embedding
-        hidden_states = self.model.embed_tokens(input_ids)
-
-        # Keep previous layer outputs for depth attention
-        prev_states = [hidden_states]
-        all_alphas = []
-
-        # Iterate through decoder blocks
-        for layer_idx, (layer, adapter) in enumerate(zip(self.model.layers, self.adapters)):
-            if self.lookback is not None:
-                adapter_prev_states = prev_states[-self.lookback:]
-            else:
-                adapter_prev_states = prev_states
-
-            # Qwen-style layer forward
-            # NOTE: exact kwargs may vary slightly by Qwen3 implementation
-            layer_outputs = layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                **kwargs
-            )
-
-            # HF decoder blocks often return tuple: (hidden_states, ...)
-            h_base = layer_outputs[0] if isinstance(layer_outputs, tuple) else layer_outputs
-
-            # Add AttnRes-style adapter correction
-            hidden_states, alpha = adapter(h_base, adapter_prev_states)
-            prev_states.append(hidden_states)
-
-            if return_depth_weights:
-                all_alphas.append(alpha)
-
-        # Final norm
-        if hasattr(self.model, "norm") and self.model.norm is not None:
-            hidden_states = self.model.norm(hidden_states)
-
-        # LM head
-        logits = self.base_lm.lm_head(hidden_states)
-
-        loss = None
-        if labels is not None:
-            # standard causal LM loss
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            loss = F.cross_entropy(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_labels.view(-1),
-                ignore_index=-100
-            )
-
-        output = {
-            "logits": logits,
-            "loss": loss,
-        }
-
-        if return_depth_weights:
-            output["depth_weights"] = all_alphas
-
-        return output
 
 
 class Qwen3AttnResConfigMixin:
@@ -228,6 +124,31 @@ class Qwen3ForCausalLMWithAttnRes(PreTrainedModel, GenerationMixin):
             f"trainable params: {trainable_params:,} || "
             f"all params: {all_params:,} || "
             f"trainable%: {100 * trainable_params / all_params:.4f}"
+        )
+
+    def adapter_state_dict(self):
+        return self.adapters.state_dict()
+
+    def state_dict(self, destination=None, prefix="", keep_vars=False):
+        adapter_state = self.adapter_state_dict()
+        if destination is None:
+            destination = {}
+
+        for name, tensor in adapter_state.items():
+            key = f"{prefix}adapters.{name}"
+            destination[key] = tensor if keep_vars else tensor.detach().clone()
+
+        return destination
+
+    def save_pretrained(self, save_directory, *args, **kwargs):
+        safe_serialization = kwargs.pop("safe_serialization", True)
+        selected_state_dict = self.state_dict()
+        return super().save_pretrained(
+            save_directory,
+            *args,
+            state_dict=selected_state_dict,
+            safe_serialization=safe_serialization,
+            **kwargs,
         )
 
     def get_input_embeddings(self):

@@ -130,10 +130,9 @@ class TrainerRunner:
         return train_dataset, eval_dataset
 
     def build_training_args(self, has_eval):
-        # The AttnRes wrapper reuses backbone modules under multiple names
-        # (e.g. model.* and base_lm.model.*), which safetensors rejects as
-        # shared tensors when Trainer saves checkpoints.
-        save_safetensors = self.args.method != "attnres"
+        eval_strategy = self.args.eval_strategy
+        if not has_eval:
+            eval_strategy = "no"
 
         return TrainingArguments(
             output_dir=self.args.save_dir,
@@ -145,14 +144,14 @@ class TrainerRunner:
             logging_steps=self.args.logging_steps,
             save_steps=self.args.save_steps,
             eval_steps=self.args.eval_steps,
-            eval_strategy="steps" if has_eval else "no",
-            save_strategy="steps",
+            eval_strategy=eval_strategy,
+            save_strategy=self.args.save_strategy,
             logging_strategy="steps",
             fp16=torch.cuda.is_available(),
             report_to="wandb" if self.args.use_wandb else "none",
             run_name=self.args.wandb_run_name,
             remove_unused_columns=False,
-            save_safetensors=save_safetensors,
+            save_safetensors=True,
         )
 
     def run(self):
@@ -192,7 +191,9 @@ def build_parser():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
     parser.add_argument("--logging_steps", type=int, default=10)
+    parser.add_argument("--save_strategy", choices=["steps", "epoch"], default="steps")
     parser.add_argument("--save_steps", type=int, default=200)
+    parser.add_argument("--eval_strategy", choices=["no", "steps", "epoch"], default="no")
     parser.add_argument("--eval_steps", type=int, default=200)
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--wandb_project", default=None)
