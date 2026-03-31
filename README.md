@@ -23,14 +23,14 @@ We want to answer questions such as:
 - How does it compare with LoRA in trainable parameter count, memory usage, runtime, and downstream performance?
 - What trade-offs appear when AttnRes is used for fine-tuning rather than full pretraining?
 
-## Development Plan
+## Team Contribution
 
-| Task | Content | Owner |
+| Area | Content | Owner |
 |---|---|---|
-| Algorithm | Design AttnRes as a PEFT method and implement the core algorithm modules. | Weiguo |
-| Data | Download datasets and preprocess them into the required format for training and evaluation. | Shaowei |
-| Trainer | Build the training pipeline, run fine-tuning experiments, and save checkpoints and training logs. | Shaowei |
-| Evaluator | Evaluate models before and after training, and save metrics, inference speed, memory usage, and other detailed results. | Shaowei |
+| AttnRes method | Core AttnRes implementation for Qwen, hook-based integration, and AttnRes model construction. | Weiguo |
+| Attention analysis | Layer analysis code and analysis utilities under `src/analyze/`. | Weiguo |
+| Training and evaluation | Training pipeline, evaluation pipeline, and comparison workflow for base, LoRA, and AttnRes. | Shaowei |
+| Experiment workflow | Data/model download scripts, experiment commands under `commands/`, and result collection into CSV tables. | Shaowei |
 
 ## Core IDEA
 
@@ -71,3 +71,69 @@ The wrapper also supports practical control modes for analysis:
 - You can route generation/forward through strict base behavior when adapters are effectively disabled, making parity checks and ablations straightforward.
 
 In short, this adapter keeps the spirit of Attention Residuals, but packages it into a clean, switchable, and parameter-efficient fine-tuning mechanism you can compare fairly against LoRA.
+
+## Repository Structure
+
+The codebase is organized into four main parts:
+
+- `src/AttnResAdapter.py`: core AttnRes PEFT wrapper on top of the frozen backbone.
+- `src/trainer.py`: training pipeline for LoRA and AttnRes.
+- `src/evaluator.py`: evaluation pipeline for base, LoRA, and AttnRes.
+- `src/analyze/`: layer analysis code added for attention-based inspection.
+- `scripts/`: thin Python entrypoints.
+- `commands/train/`: ready-to-run training commands.
+- `commands/evaluate/`: ready-to-run evaluation commands.
+- `scripts/collect_eval_results.py`: merge all evaluation summaries into CSV tables.
+
+## Tasks
+
+The current experiments focus on three tasks:
+
+- `gsm8k`
+- `rte`
+- `boolq`
+
+For the main comparison, each task is evaluated with:
+
+- `base`
+- `lora`
+- `attnres`
+
+In addition, `rte` is used for `lookback` ablation of AttnRes.
+
+## Main Commands
+
+Download data and model:
+
+```bash
+bash commands/down_data_model.sh
+```
+
+Run training:
+
+```bash
+bash commands/train/train_lora_gsm8k.sh
+bash commands/train/train_attenres_gsm8k.sh
+```
+
+Run evaluation:
+
+```bash
+bash commands/evaluate/evaluate_all_main.sh
+bash commands/evaluate/evaluate_attnres_rte_ablation.sh
+```
+
+Merge evaluation summaries:
+
+```bash
+bash commands/merge_result.sh
+```
+
+This will generate:
+
+- `results/main_results.csv`
+- `results/ablation_results.csv`
+
+## Notes
+
+- The main comparison uses the `transformers` backend for all methods to keep evaluation fair.
