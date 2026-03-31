@@ -22,6 +22,7 @@ We want to answer questions such as:
 - Can AttnRes be converted into a parameter-efficient adaptation mechanism without losing its original motivation?
 - How does it compare with LoRA in trainable parameter count, memory usage, runtime, and downstream performance?
 - What trade-offs appear when AttnRes is used for fine-tuning rather than full pretraining?
+- Can depth-wise residual routing provide a useful new adaptation axis for PEFT, even if it does not directly modify backbone weights?
 
 ## Team Contribution
 
@@ -80,6 +81,7 @@ The codebase is organized into four main parts:
 - `src/trainer.py`: training pipeline for LoRA and AttnRes.
 - `src/evaluator.py`: evaluation pipeline for base, LoRA, and AttnRes.
 - `src/analyze/`: layer analysis code added for attention-based inspection.
+- `src/analyze/analysis_notebook.ipynb`: notebook for RTE full-lookback analysis and cross-task attention-pattern comparison.
 - `scripts/`: thin Python entrypoints.
 - `commands/train/`: ready-to-run training commands.
 - `commands/evaluate/`: ready-to-run evaluation commands.
@@ -100,6 +102,16 @@ For the main comparison, each task is evaluated with:
 - `attnres`
 
 In addition, `rte` is used for `lookback` ablation of AttnRes.
+
+## Main Findings
+
+At the current stage, the main empirical picture is:
+
+- `LoRA` is the strongest method across the three main tasks.
+- `AttnRes-PEFT` gives the clearest improvement on `gsm8k`, suggesting that depth-wise residual routing is more helpful for reasoning-heavy tasks than for short classification tasks.
+- On `boolq` and `rte`, AttnRes is closer to the frozen baseline and remains below LoRA.
+- In the `rte` ablation, increasing `lookback` does not change the number of trainable parameters, but it does increase runtime and memory usage.
+- The `lookback` ablation suggests that performance saturates fairly early, while the attention analysis shows that different tasks reuse earlier layers in different ways.
 
 ## Main Commands
 
@@ -134,6 +146,21 @@ This will generate:
 - `results/main_results.csv`
 - `results/ablation_results.csv`
 
+Run analysis:
+
+- Use `src/analyze/analysis_notebook.ipynb` for the final layer-usage analysis.
+- The notebook is organized into two parts:
+  - `RTE` full-lookback analysis for detailed layer usage inspection
+  - task-wise comparison across `boolq`, `gsm8k`, and `rte`
+
 ## Notes
 
 - The main comparison uses the `transformers` backend for all methods to keep evaluation fair.
+- We do not use `vllm` for the final comparison, since AttnRes currently relies on custom model logic and is not integrated into the same optimized inference path as standard LoRA models.
+- AttnRes currently behaves more like a research prototype than a production-ready PEFT method: training, saving/loading, and analysis require more custom code than LoRA.
+
+## Why It Is Still Interesting
+
+Although the current results are still behind LoRA, we think the method is meaningful because it explores a different PEFT direction. Instead of changing weight matrices, AttnRes-PEFT adapts the model by changing how residual information is reused across layers. Our results suggest that this depth-wise routing can already help, especially on reasoning-heavy tasks such as GSM8K.
+
+This direction is also naturally compatible with methods such as LoRA. A hybrid design could let one component change what each layer computes, while the other changes how information is routed across depth. We see this as a promising direction for future work.
