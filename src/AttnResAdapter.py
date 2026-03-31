@@ -100,7 +100,7 @@ class Qwen3ForCausalLMWithAttnRes(PreTrainedModel, GenerationMixin):
         ])
 
         emb = self.model.embed_tokens.weight
-        self.adapters.to(device=emb.device)
+        self.adapters.to(device=emb.device, dtype=emb.dtype)
 
         self.freeze_backbone()
 
