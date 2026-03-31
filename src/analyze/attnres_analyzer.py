@@ -156,19 +156,23 @@ class AttnResAnalyzer:
         
         # Aggregate across all datasets
         if stats['per_dataset']:
-            all_alphas = []
-            for dataset_id, dataset_alphas in self.layer_source_attention[layer_idx].items():
-                all_alphas.extend(dataset_alphas)
-            if all_alphas:
-                alpha_all = torch.cat(all_alphas, dim=0)
-                depth_attention_all = alpha_all.mean(dim=(0, 2))
+            per_batch_depth_means = []
+            total_samples = 0
+            for dataset_alphas in self.layer_source_attention[layer_idx].values():
+                for alpha in dataset_alphas:
+                    per_batch_depth_means.append(alpha.mean(dim=(0, 2)))
+                    total_samples += alpha.shape[0]
+
+            if per_batch_depth_means:
+                depth_mean_tensor = torch.stack(per_batch_depth_means, dim=0)
+                depth_attention_all = depth_mean_tensor.mean(dim=0)
                 source_layer_ids_all = self._get_source_layer_ids(layer_idx, depth_attention_all.shape[0])
                 stats['aggregated'] = {
                     'mean_depth_attention': depth_attention_all.numpy().tolist(),
                     'source_layer_ids': source_layer_ids_all,
-                    'depth_attention_std': alpha_all.std(dim=0).mean(dim=-1).numpy().tolist(),
+                    'depth_attention_std': depth_mean_tensor.std(dim=0).numpy().tolist(),
                     'layer_ranking': self._get_layer_ranking(depth_attention_all, layer_idx=layer_idx),
-                    'num_total_samples': alpha_all.shape[0],
+                    'num_total_samples': total_samples,
                 }
         
         return stats
@@ -246,13 +250,13 @@ class AttnResAnalyzer:
         flow_matrix = np.zeros((self.num_layers + 1, self.num_layers))
         
         for layer_idx in range(self.num_layers):
-            alphas_all = []
+            per_batch_depth_means = []
             for dataset_alphas in self.layer_source_attention[layer_idx].values():
-                alphas_all.extend(dataset_alphas)
+                for alpha in dataset_alphas:
+                    per_batch_depth_means.append(alpha.mean(dim=(0, 2)))
             
-            if alphas_all:
-                alpha_concat = torch.cat(alphas_all, dim=0)
-                depth_attention = alpha_concat.mean(dim=(0, 2))  # [Lprev]
+            if per_batch_depth_means:
+                depth_attention = torch.stack(per_batch_depth_means, dim=0).mean(dim=0)  # [Lprev]
                 source_layer_ids = self._get_source_layer_ids(layer_idx, depth_attention.shape[0])
 
                 # Map source ids to matrix rows, including embedding row.
@@ -334,8 +338,8 @@ class AttnResAnalyzer:
         if not alphas:
             return []
         
-        alpha_concat = torch.cat(alphas, dim=0)
-        depth_attention = alpha_concat.mean(dim=(0, 2))  # [Lprev]
+        per_batch_depth_means = [alpha.mean(dim=(0, 2)) for alpha in alphas]
+        depth_attention = torch.stack(per_batch_depth_means, dim=0).mean(dim=0)  # [Lprev]
         ranking = self._get_layer_ranking(depth_attention, layer_idx=layer_idx)
         return ranking[:top_k]
     

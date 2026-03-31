@@ -1,0 +1,8 @@
+task,lookback,setting,split,accuracy,avg_latency,avg_generated_tokens,avg_tokens_per_second,avg_peak_memory_mb,num_examples,source_path
+rte,1,attnres_rte_lookback_1,validation,0.6245487364620939,1.4799231217656326,78.60649819494584,52.54146279138317,15555.440843933326,277,ablation/attnres_rte_lookback_1/rte/validation_summary.json
+rte,2,attnres_rte_lookback_2,validation,0.6389891696750902,1.5081256072874103,78.60649819494584,51.57355478118489,15555.440843933326,277,ablation/attnres_rte_lookback_2/rte/validation_summary.json
+rte,4,attnres_rte_lookback_4,validation,0.6389891696750902,1.5969859839346434,78.63537906137184,48.875517391936754,15555.570356568705,277,ablation/attnres_rte_lookback_4/rte/validation_summary.json
+rte,8,attnres_rte_lookback_8,validation,0.6353790613718412,1.722725259698255,78.63537906137184,45.296080540836655,15555.570356568705,277,ablation/attnres_rte_lookback_8/rte/validation_summary.json
+rte,16,attnres_rte_lookback_16,validation,0.6353790613718412,1.8957874688861172,78.63537906137184,41.17299384262406,15555.570356568705,277,ablation/attnres_rte_lookback_16/rte/validation_summary.json
+rte,20,attnres_rte_lookback_20,validation,0.6389891696750902,1.950245504344844,78.63537906137184,40.02384801688409,15611.272143642826,277,ablation/attnres_rte_lookback_20/rte/validation_summary.json
+rte,28,attnres_rte_lookback_28,validation,0.6389891696750902,2.000164515705315,78.63537906137184,39.02617615135349,15885.372484558326,277,ablation/attnres_rte_lookback_28/rte/validation_summary.json

@@ -1,0 +1,34 @@
+{
+  "rte_ablation_config": {
+    "dataset_name": "RTE Ablation",
+    "data_path": "../../data/rte/validation.json",
+    "adapter_path": "../../checkpoints/ablation/attnres_rte_lookback_28",
+    "max_length": 256,
+    "lookback": 28
+  },
+  "main_task_configs": {
+    "boolq": {
+      "dataset_name": "BoolQ",
+      "data_path": "../../data/boolq/validation.json",
+      "adapter_path": "../../checkpoints/attnres_boolq",
+      "max_length": 512,
+      "lookback": 8
+    },
+    "gsm8k": {
+      "dataset_name": "GSM8K",
+      "data_path": "../../data/gsm8k/test.json",
+      "adapter_path": "../../checkpoints/attnres_gsm8k",
+      "max_length": 1024,
+      "lookback": 8
+    },
+    "rte": {
+      "dataset_name": "RTE",
+      "data_path": "../../data/rte/validation.json",
+      "adapter_path": "../../checkpoints/attnres_rte",
+      "max_length": 256,
+      "lookback": 8
+    }
+  },
+  "max_samples_per_task": 100,
+  "batch_size": 8
+}
