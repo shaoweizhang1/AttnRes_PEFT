@@ -40,13 +40,19 @@ AttnRes-PEFT turns each Transformer layer into a small decision point: instead o
 At every layer, the adapter does three things:
 
 1. Collect previous hidden states from earlier depths.
-2. Compute depth attention weights over those states with a learned query.
-3. Build a weighted residual correction and add it to the frozen backbone output.
+2. Compute depth attention weights over those states with a learned query vector.
+3. Build a weighted residual correction, normalize it, and add it to the frozen backbone output.
 
 In compact form:
 
 $$
-\Delta h_t^{(\ell)} = \sum_{k < \ell} \alpha_{k,t}^{(\ell)} h_t^{(k)}, \qquad
+\tilde{h}_t^{(k)}=\mathrm{RMSNorm}_{\text{score}}^{(\ell)}\!\left(h_t^{(k)}\right), \qquad
+e_{k,t}^{(\ell)}=\langle q^{(\ell)}, \tilde{h}_t^{(k)} \rangle,\qquad
+\alpha_{k,t}^{(\ell)}=\mathrm{softmax}_k\!\left(e_{k,t}^{(\ell)}\right)
+$$
+
+$$
+\Delta h_t^{(\ell)}=\mathrm{RMSNorm}_{\text{out}}^{(\ell)}\!\left(\sum_{k < \ell} \alpha_{k,t}^{(\ell)} h_t^{(k)}\right), \qquad
 h_{\text{out}}^{(\ell)} = h_{\text{base}}^{(\ell)} + g^{(\ell)} \cdot \Delta h_t^{(\ell)}
 $$
 
@@ -55,8 +61,10 @@ where $\alpha$ is a softmax over depth and $g^{(\ell)}$ is a learnable scalar ga
 ### Why this is PEFT-friendly
 
 - The backbone model is frozen.
-- Only lightweight adapter parameters are trainable (query, norms, and gate per layer).
-- This keeps memory and trainable parameter count low while still adding expressive adaptation capacity.
+- Only lightweight adapter parameters are trainable (query vector, two RMSNorm scales, and gate per layer).
+- Per-layer trainable parameters are exactly $3d + 1$ in the current implementation.
+- This keeps trainable parameter count low while still adding expressive adaptation capacity.
+- It is not necessarily memory-saving versus LoRA in runtime training settings (especially with larger lookback).
 
 ### Safe and controllable behavior
 
@@ -77,6 +85,7 @@ In short, this adapter keeps the spirit of Attention Residuals, but packages it 
 
 The codebase is organized into four main parts:
 
+- [`report.pdf`](report.pdf): project report with full method, experiments, and analysis write-up.
 - `src/AttnResAdapter.py`: core AttnRes PEFT wrapper on top of the frozen backbone.
 - `src/trainer.py`: training pipeline for LoRA and AttnRes.
 - `src/evaluator.py`: evaluation pipeline for base, LoRA, and AttnRes.
