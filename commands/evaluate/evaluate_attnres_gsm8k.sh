@@ -1,0 +1,12 @@
+python ./scripts/evaluate.py \
+  --backend transformers \
+  --method attnres \
+  --base_model_dir ./model \
+  --adapter_dir ./checkpoints/attnres_gsm8k \
+  --data_path ./data/gsm8k/test.json \
+  --save_dir ./results/main/attnres_gsm8k \
+  --max_length 1024 \
+  --max_new_tokens 64 \
+  --batch_size 8 \
+  --attnres_lookback 8 \
+  --attnres_gate_init 0.0

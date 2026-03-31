@@ -1,0 +1,9 @@
+bash commands/evaluate/evaluate_base_gsm8k.sh
+bash commands/evaluate/evaluate_lora_gsm8k.sh
+bash commands/evaluate/evaluate_attnres_gsm8k.sh
+bash commands/evaluate/evaluate_base_rte.sh
+bash commands/evaluate/evaluate_lora_rte.sh
+bash commands/evaluate/evaluate_attnres_rte.sh
+bash commands/evaluate/evaluate_base_boolq.sh
+bash commands/evaluate/evaluate_lora_boolq.sh
+bash commands/evaluate/evaluate_attnres_boolq.sh

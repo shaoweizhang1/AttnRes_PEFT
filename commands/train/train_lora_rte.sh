@@ -1,0 +1,20 @@
+python ./scripts/train.py \
+  --method lora \
+  --model_dir ./model \
+  --train_path ./data/rte/train.json \
+  --save_dir ./checkpoints/lora_rte \
+  --max_length 256 \
+  --num_train_epochs 3 \
+  --per_device_train_batch_size 2 \
+  --gradient_accumulation_steps 8 \
+  --learning_rate 2e-4 \
+  --logging_steps 10 \
+  --save_strategy epoch \
+  --lora_r 8 \
+  --lora_alpha 16 \
+  --lora_dropout 0.05 \
+  --lora_target_modules q_proj,k_proj,v_proj,o_proj \
+  --use_wandb \
+  --wandb_project  \
+  --wandb_run_name \
+  --wandb_entity 

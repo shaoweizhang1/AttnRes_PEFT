@@ -1,0 +1,12 @@
+python ./scripts/evaluate.py \
+  --backend transformers \
+  --method attnres \
+  --base_model_dir ./model \
+  --adapter_dir ./checkpoints/attnres_boolq \
+  --data_path ./data/boolq/validation.json \
+  --save_dir ./results/main/attnres_boolq \
+  --max_length 512 \
+  --max_new_tokens 8 \
+  --batch_size 8 \
+  --attnres_lookback 8 \
+  --attnres_gate_init 0.0
