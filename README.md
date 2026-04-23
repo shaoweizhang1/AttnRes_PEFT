@@ -114,13 +114,21 @@ In addition, `rte` is used for `lookback` ablation of AttnRes.
 
 ## Main Findings
 
+### Latest Results (2026-04-23, `mul_sum`)
+
+| Task | Base | LoRA | AttnRes (`mul_sum`) | Delta vs LoRA |
+|---|---:|---:|---:|---:|
+| `rte` | 0.6354 | 0.6679 | **0.7256** | **+0.0578** |
+| `boolq` | 0.7428 | 0.7688 | **0.7709** | **+0.0021** |
+| `gsm8k` | 0.0159 | 0.2062 | **0.2161** | **+0.0099** |
+
 At the current stage, the main empirical picture is:
 
-- `LoRA` is the strongest method across the three main tasks.
-- `AttnRes-PEFT` gives the clearest improvement on `gsm8k`, suggesting that depth-wise residual routing is more helpful for reasoning-heavy tasks than for short classification tasks.
-- On `boolq` and `rte`, AttnRes is closer to the frozen baseline and remains below LoRA.
+- The latest AttnRes variant (`mul_sum`) outperforms LoRA on all three tasks in this benchmark set.
+- The largest gain appears on `rte`, while `gsm8k` and `boolq` show smaller but consistent improvements over LoRA.
+- On the architecture side, moving from plain additive residual updates to multiplicative residual modulation with block memory is important for these gains.
 - In the `rte` ablation, increasing `lookback` does not change the number of trainable parameters, but it does increase runtime and memory usage.
-- The `lookback` ablation suggests that performance saturates fairly early, while the attention analysis shows that different tasks reuse earlier layers in different ways.
+- AttnRes still behaves like a research prototype: custom wrapper logic and experiment scripts are required for stable training/evaluation.
 
 ## Main Commands
 
@@ -170,6 +178,6 @@ Run analysis:
 
 ## Why It Is Still Interesting
 
-Although the current results are still behind LoRA, we think the method is meaningful because it explores a different PEFT direction. Instead of changing weight matrices, AttnRes-PEFT adapts the model by changing how residual information is reused across layers. Our results suggest that this depth-wise routing can already help, especially on reasoning-heavy tasks such as GSM8K.
+This work explores a PEFT direction that is different from weight-update-centric methods. Instead of directly adapting backbone weight matrices, AttnRes-PEFT adapts *depth-wise information routing* through residual mixing across layers.
 
-This direction is also naturally compatible with methods such as LoRA. A hybrid design could let one component change what each layer computes, while the other changes how information is routed across depth. We see this as a promising direction for future work.
+With the latest `mul_sum` variant, this routing-based approach is not only viable but also competitive against LoRA on the current task set. It also remains naturally compatible with LoRA-style methods: one component can adapt layer computation, while the other adapts cross-layer routing.
