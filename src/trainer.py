@@ -95,6 +95,14 @@ def get_attnres_model(model, args):
         model,
         lookback=args.attnres_lookback,
         gate_init=args.attnres_gate_init,
+        block_size=args.attnres_block_size,
+        block_reduce=args.attnres_block_reduce,
+        query_rank=args.attnres_query_rank,
+        token_gate=args.attnres_token_gate,
+        residual_mode=args.attnres_residual_mode,
+        projection_rank=args.attnres_projection_rank,
+        projection_init_std=args.attnres_projection_init_std,
+        memory_mode=args.attnres_memory_mode,
     )
 
     if hasattr(model, "print_trainable_parameters"):
@@ -109,7 +117,8 @@ class TrainerRunner:
 
     def load_model_and_tokenizer(self):
         tokenizer = load_tokenizer(self.args.model_dir)
-        model = load_model(self.args.model_dir)
+        torch_dtype = torch.float32 if self.args.model_dtype == "fp32" else torch.float16
+        model = load_model(self.args.model_dir, torch_dtype=torch_dtype)
 
         if self.args.method == "lora":
             model = get_lora_model(model, self.args)
@@ -146,8 +155,11 @@ class TrainerRunner:
             eval_steps=self.args.eval_steps,
             eval_strategy=eval_strategy,
             save_strategy=self.args.save_strategy,
+            max_steps=self.args.max_steps,
             logging_strategy="steps",
-            fp16=torch.cuda.is_available(),
+            logging_first_step=True,
+            disable_tqdm=True,
+            fp16=self.args.precision == "fp16" and torch.cuda.is_available(),
             report_to="wandb" if self.args.use_wandb else "none",
             run_name=self.args.wandb_run_name,
             remove_unused_columns=False,
@@ -190,9 +202,12 @@ def build_parser():
     parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp16")
+    parser.add_argument("--model_dtype", choices=["fp16", "fp32"], default="fp16")
     parser.add_argument("--logging_steps", type=int, default=10)
-    parser.add_argument("--save_strategy", choices=["steps", "epoch"], default="steps")
+    parser.add_argument("--save_strategy", choices=["no", "steps", "epoch"], default="steps")
     parser.add_argument("--save_steps", type=int, default=200)
+    parser.add_argument("--max_steps", type=int, default=-1)
     parser.add_argument("--eval_strategy", choices=["no", "steps", "epoch"], default="no")
     parser.add_argument("--eval_steps", type=int, default=200)
     parser.add_argument("--use_wandb", action="store_true")
@@ -205,6 +220,14 @@ def build_parser():
     parser.add_argument("--lora_target_modules", default="q_proj,k_proj,v_proj,o_proj")
     parser.add_argument("--attnres_lookback", type=int, default=8)
     parser.add_argument("--attnres_gate_init", type=float, default=0.0)
+    parser.add_argument("--attnres_block_size", type=int, default=None)
+    parser.add_argument("--attnres_block_reduce", choices=["mean", "sum"], default="mean")
+    parser.add_argument("--attnres_query_rank", type=int, default=0)
+    parser.add_argument("--attnres_token_gate", action="store_true")
+    parser.add_argument("--attnres_residual_mode", choices=["add", "mul"], default="add")
+    parser.add_argument("--attnres_projection_rank", type=int, default=0)
+    parser.add_argument("--attnres_projection_init_std", type=float, default=0.02)
+    parser.add_argument("--attnres_memory_mode", choices=["hybrid", "block", "lookback"], default="hybrid")
     return parser
 
 

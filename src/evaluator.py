@@ -143,21 +143,31 @@ class Evaluator:
     def setup_transformers(self):
         self.device = get_device()
 
+        torch_dtype = torch.float32 if self.args.model_dtype == "fp32" else torch.float16
+
         if self.args.method == "base":
-            self.model = load_model(self.args.model_dir, self.device)
+            self.model = load_model(self.args.model_dir, self.device, torch_dtype=torch_dtype)
         elif self.args.method == "lora":
             if self.args.adapter_dir is None:
                 raise ValueError("LoRA evaluation requires --adapter_dir.")
-            base_model = load_model(self.args.base_model_dir, self.device)
+            base_model = load_model(self.args.base_model_dir, self.device, torch_dtype=torch_dtype)
             self.model = PeftModel.from_pretrained(base_model, self.args.adapter_dir)
         elif self.args.method == "attnres":
             if self.args.adapter_dir is None:
                 raise ValueError("AttnRes evaluation requires --adapter_dir.")
-            base_model = load_model(self.args.base_model_dir, self.device)
+            base_model = load_model(self.args.base_model_dir, self.device, torch_dtype=torch_dtype)
             self.model = load_qwen3_attnres_model(
                 base_model,
                 lookback=self.args.attnres_lookback,
                 gate_init=self.args.attnres_gate_init,
+                block_size=self.args.attnres_block_size,
+                block_reduce=self.args.attnres_block_reduce,
+                query_rank=self.args.attnres_query_rank,
+                token_gate=self.args.attnres_token_gate,
+                residual_mode=self.args.attnres_residual_mode,
+                projection_rank=self.args.attnres_projection_rank,
+                projection_init_std=self.args.attnres_projection_init_std,
+                memory_mode=self.args.attnres_memory_mode,
             )
             state_dict = load_attnres_state_dict(self.args.adapter_dir, self.device)
             self.model.load_state_dict(state_dict, strict=False)
@@ -298,12 +308,22 @@ def build_parser():
     parser.add_argument("--save_dir", default=DEFAULT_SAVE_DIR)
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--max_new_tokens", type=int, default=64)
+    parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp16")
+    parser.add_argument("--model_dtype", choices=["fp16", "fp32"], default="fp16")
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--attnres_lookback", type=int, default=8)
     parser.add_argument("--attnres_gate_init", type=float, default=0.0)
+    parser.add_argument("--attnres_block_size", type=int, default=None)
+    parser.add_argument("--attnres_block_reduce", choices=["mean", "sum"], default="mean")
+    parser.add_argument("--attnres_query_rank", type=int, default=0)
+    parser.add_argument("--attnres_token_gate", action="store_true")
+    parser.add_argument("--attnres_residual_mode", choices=["add", "mul"], default="add")
+    parser.add_argument("--attnres_projection_rank", type=int, default=0)
+    parser.add_argument("--attnres_projection_init_std", type=float, default=0.02)
+    parser.add_argument("--attnres_memory_mode", choices=["hybrid", "block", "lookback"], default="hybrid")
     return parser
 
 

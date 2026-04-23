@@ -43,13 +43,15 @@ def load_tokenizer(model_dir):
     return tokenizer
 
 
-def load_model(model_dir, device=None):
+def load_model(model_dir, device=None, torch_dtype=None):
     if device is None:
         device = get_device()
+    if torch_dtype is None:
+        torch_dtype = torch.float16 if device == "cuda" else torch.float32
 
     model = AutoModelForCausalLM.from_pretrained(
         model_dir,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        torch_dtype=torch_dtype,
         trust_remote_code=True,
     )
 
