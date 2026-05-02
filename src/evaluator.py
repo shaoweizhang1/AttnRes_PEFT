@@ -7,7 +7,6 @@ import torch
 from peft import PeftModel
 from tqdm import tqdm
 from transformers import GenerationConfig
-from vllm import LLM, SamplingParams
 
 from src.AttnResAdapter import load_qwen3_attnres_model
 from src.utils import get_device, build_prompt, load_json, load_model, load_tokenizer, save_json
@@ -21,6 +20,25 @@ def normalize_text(text):
     return text.strip().lower()
 
 
+def _label_from_text(text, labels, aliases=None):
+    """
+    Find the first label mentioned in text using word-boundary-safe matching.
+    Prevents matching labels that appear inside longer underscore-joined tokens
+    (e.g. "yes_or_no" should not match "yes", "_not_entailment" should not match "not_entailment").
+    """
+    text = normalize_text(text).replace("-", "_").replace(" ", "_")
+    aliases = aliases or {}
+    for label, terms in aliases.items():
+        for term in terms:
+            if re.search(rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])", text):
+                return label
+    for label in sorted(labels, key=len, reverse=True):
+        normalized = label.lower().replace("-", "_").replace(" ", "_")
+        if re.search(rf"(?<![a-z0-9_]){re.escape(normalized)}(?![a-z0-9_])", text):
+            return label
+    return text
+
+
 def normalize_answer(task, text):
     text = text.strip()
 
@@ -32,23 +50,27 @@ def normalize_answer(task, text):
             return numbers[-1].replace(",", "")
         return normalize_text(text)
 
-    text = normalize_text(text)
+    if task == "boolq":
+        return _label_from_text(
+            text,
+            ["no", "yes"],
+            aliases={
+                "yes": ["yes", "true", "correct"],
+                "no":  ["no", "false", "incorrect"],
+            },
+        )
 
     if task == "rte":
-        if "not_entailment" in text:
-            return "not_entailment"
-        if "entailment" in text:
-            return "entailment"
-        return text
+        return _label_from_text(
+            text,
+            ["not_entailment", "entailment"],
+            aliases={
+                "not_entailment": ["not_entailment", "not_entailed", "not", "false"],
+                "entailment":     ["entailment", "entailed", "yes", "true"],
+            },
+        )
 
-    if task == "boolq":
-        if re.search(r"\b(yes|true)\b", text):
-            return "yes"
-        if re.search(r"\b(no|false)\b", text):
-            return "no"
-        return text
-
-    return text
+    return normalize_text(text)
 
 
 def compute_score(task, prediction, answer):
@@ -94,7 +116,6 @@ def load_eval_data(args):
 def save_results(details, summary, save_dir):
     task_name = details[0]["task"] if details else "unknown"
     split_name = details[0]["split"] if details else "unknown"
-
     save_json(details, os.path.join(save_dir, task_name, f"{split_name}_details.json"))
     save_json(summary, os.path.join(save_dir, task_name, f"{split_name}_summary.json"))
 
@@ -105,7 +126,6 @@ def load_attnres_state_dict(adapter_dir, device):
 
     if os.path.exists(safetensors_path):
         from safetensors.torch import load_file
-
         return load_file(safetensors_path, device=device)
 
     if os.path.exists(pytorch_path):
@@ -125,6 +145,9 @@ class Evaluator:
             self.setup_transformers()
 
     def setup_vllm(self):
+        # Lazy import so missing vllm doesn't crash transformers-only usage
+        from vllm import LLM, SamplingParams
+
         if self.args.method != "base":
             raise ValueError("vllm backend currently only supports --method base.")
 
@@ -142,25 +165,30 @@ class Evaluator:
 
     def setup_transformers(self):
         self.device = get_device()
+        torch_dtype = torch.float32 if self.args.model_dtype == "fp32" else torch.float16
 
         if self.args.method == "base":
-            self.model = load_model(self.args.model_dir, self.device)
+            self.model = load_model(self.args.model_dir, self.device, torch_dtype=torch_dtype)
         elif self.args.method == "lora":
             if self.args.adapter_dir is None:
                 raise ValueError("LoRA evaluation requires --adapter_dir.")
-            base_model = load_model(self.args.base_model_dir, self.device)
+            base_model = load_model(self.args.base_model_dir, self.device, torch_dtype=torch_dtype)
             self.model = PeftModel.from_pretrained(base_model, self.args.adapter_dir)
         elif self.args.method == "attnres":
             if self.args.adapter_dir is None:
                 raise ValueError("AttnRes evaluation requires --adapter_dir.")
-            base_model = load_model(self.args.base_model_dir, self.device)
+            base_model = load_model(self.args.base_model_dir, self.device, torch_dtype=torch_dtype)
             self.model = load_qwen3_attnres_model(
                 base_model,
                 lookback=self.args.attnres_lookback,
-                gate_init=self.args.attnres_gate_init,
             )
             state_dict = load_attnres_state_dict(self.args.adapter_dir, self.device)
-            self.model.load_state_dict(state_dict, strict=False)
+            missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+            adapter_missing = [k for k in missing if k.startswith("adapters.")]
+            if adapter_missing:
+                print(f"[WARNING] {len(adapter_missing)} adapter keys missing from checkpoint: {adapter_missing[:5]}")
+            if unexpected:
+                print(f"[WARNING] {len(unexpected)} unexpected keys in checkpoint: {unexpected[:5]}")
         else:
             raise ValueError(f"Unsupported method: {self.args.method}")
 
@@ -178,19 +206,13 @@ class Evaluator:
 
         results = []
         latency = end_time - start_time
-
         for output in outputs:
             prediction = output.outputs[0].text.strip()
             generated_tokens = len(output.outputs[0].token_ids)
-            result = {
-                "prediction": prediction,
-                "latency": latency,
-                "generated_tokens": generated_tokens,
-            }
+            result = {"prediction": prediction, "latency": latency, "generated_tokens": generated_tokens}
             if latency > 0:
                 result["tokens_per_second"] = generated_tokens / latency
             results.append(result)
-
         return results
 
     def generate_batch_transformers(self, prompts):
@@ -213,27 +235,28 @@ class Evaluator:
             )
         end_time = time.time()
 
-        results = []
-        latency = end_time - start_time
-        prompt_lengths = inputs["attention_mask"].sum(dim=1).tolist()
+        total_latency = end_time - start_time
+        per_sample_latency = total_latency / len(outputs) if len(outputs) > 0 else 0.0
+        # With left padding, HF returns [padded_input | generated] for every sequence.
+        # Slice by padded input width (uniform across the batch), NOT by per-sample
+        # real token count — otherwise prompt tail leaks into the prediction string.
+        input_width = inputs["input_ids"].shape[1]
 
-        for i, output_ids in enumerate(outputs):
-            generated_ids = output_ids[int(prompt_lengths[i]):]
+        results = []
+        for output_ids in outputs:
+            generated_ids = output_ids[input_width:]
             prediction = self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
             generated_tokens = len(generated_ids)
 
             result = {
                 "prediction": prediction,
-                "latency": latency,
+                "latency": per_sample_latency,
                 "generated_tokens": generated_tokens,
             }
-
-            if latency > 0:
-                result["tokens_per_second"] = generated_tokens / latency
-
+            if per_sample_latency > 0:
+                result["tokens_per_second"] = generated_tokens / per_sample_latency
             if self.device == "cuda":
                 result["peak_memory_mb"] = torch.cuda.max_memory_allocated() / 1024 / 1024
-
             results.append(result)
 
         return results
@@ -245,17 +268,15 @@ class Evaluator:
 
     def evaluate(self, data):
         details = []
-
         for i in tqdm(range(0, len(data), self.args.batch_size), desc="Evaluating"):
             batch = data[i:i + self.args.batch_size]
             prompts = [build_prompt(example) for example in batch]
             results = self.generate_batch(prompts)
 
             for example, result in zip(batch, results):
-                score, normalized_prediction, normalized_answer = compute_score(
+                score, norm_pred, norm_ans = compute_score(
                     example["task"], result["prediction"], example["output"]
                 )
-
                 row = {
                     "task": example["task"],
                     "split": example["split"],
@@ -263,19 +284,16 @@ class Evaluator:
                     "input": example["input"],
                     "reference": example["output"],
                     "prediction": result["prediction"],
-                    "normalized_reference": normalized_answer,
-                    "normalized_prediction": normalized_prediction,
+                    "normalized_reference": norm_ans,
+                    "normalized_prediction": norm_pred,
                     "correct": score,
                     "latency": result["latency"],
                     "generated_tokens": result["generated_tokens"],
                 }
-
                 if "tokens_per_second" in result:
                     row["tokens_per_second"] = result["tokens_per_second"]
-
                 if "peak_memory_mb" in result:
                     row["peak_memory_mb"] = result["peak_memory_mb"]
-
                 details.append(row)
 
         return details
@@ -298,12 +316,13 @@ def build_parser():
     parser.add_argument("--save_dir", default=DEFAULT_SAVE_DIR)
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--max_new_tokens", type=int, default=64)
+    parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp16")
+    parser.add_argument("--model_dtype", choices=["fp16", "fp32"], default="fp16")
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--tensor_parallel_size", type=int, default=1)
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.9)
     parser.add_argument("--attnres_lookback", type=int, default=8)
-    parser.add_argument("--attnres_gate_init", type=float, default=0.0)
     return parser
 
 
