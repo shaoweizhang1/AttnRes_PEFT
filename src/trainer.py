@@ -13,6 +13,7 @@ from src.utils import build_prompt, load_json, load_model, load_tokenizer, save_
 
 DEFAULT_MODEL_DIR = "./model"
 DEFAULT_SAVE_DIR = "./checkpoints"
+DTYPE_MAP = {"fp16": torch.float16, "fp32": torch.float32, "bf16": torch.bfloat16}
 
 
 def preprocess_data(data, tokenizer, max_length):
@@ -109,12 +110,19 @@ class TrainerRunner:
 
     def load_model_and_tokenizer(self):
         tokenizer = load_tokenizer(self.args.model_dir)
-        model = load_model(self.args.model_dir)
+        torch_dtype = DTYPE_MAP[self.args.dtype]
+        model = load_model(self.args.model_dir, torch_dtype=torch_dtype)
 
         if self.args.method == "lora":
             model = get_lora_model(model, self.args)
         else:
             model = get_attnres_model(model, self.args)
+
+        # fp16 AMP requires trainable params in fp32 (GradScaler cannot unscale fp16 grads).
+        if self.args.dtype == "fp16":
+            for p in model.parameters():
+                if p.requires_grad:
+                    p.data = p.data.float()
 
         return model, tokenizer
 
@@ -147,7 +155,11 @@ class TrainerRunner:
             eval_strategy=eval_strategy,
             save_strategy=self.args.save_strategy,
             logging_strategy="steps",
-            fp16=torch.cuda.is_available(),
+            logging_first_step=True,
+            disable_tqdm=True,
+            fp16=self.args.dtype == "fp16" and torch.cuda.is_available(),
+            bf16=self.args.dtype == "bf16" and torch.cuda.is_available(),
+            max_steps=self.args.max_steps,
             report_to="wandb" if self.args.use_wandb else "none",
             run_name=self.args.wandb_run_name,
             remove_unused_columns=False,
@@ -190,9 +202,11 @@ def build_parser():
     parser.add_argument("--per_device_eval_batch_size", type=int, default=1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
     parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--dtype", choices=["fp16", "fp32", "bf16"], default="fp16")
     parser.add_argument("--logging_steps", type=int, default=10)
-    parser.add_argument("--save_strategy", choices=["steps", "epoch"], default="steps")
+    parser.add_argument("--save_strategy", choices=["no", "steps", "epoch"], default="steps")
     parser.add_argument("--save_steps", type=int, default=200)
+    parser.add_argument("--max_steps", type=int, default=-1)
     parser.add_argument("--eval_strategy", choices=["no", "steps", "epoch"], default="no")
     parser.add_argument("--eval_steps", type=int, default=200)
     parser.add_argument("--use_wandb", action="store_true")
