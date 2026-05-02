@@ -28,7 +28,7 @@ class DepthAttentionAdapter(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
 
-        self.query = nn.Parameter(torch.randn(hidden_size) * 0.02)
+        self.query = nn.Parameter(torch.zeros(hidden_size))
         self.gate = nn.Parameter(torch.tensor(gate_init)) # so that the model is intact beforing traing, which means attention residual has no effect befor training
 
         self.score_norm = RMSNorm(hidden_size)
